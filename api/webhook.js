@@ -167,6 +167,9 @@ export default async function handler(req, res) {
     let notified = 0;
 
     for (const webhookLead of leadsArray) {
+      // DEBUG: логируем что пришло от amoCRM
+      console.log(`DEBUG lead #${webhookLead.id} status_id=${webhookLead.status_id} pipeline_id=${webhookLead.pipeline_id}`);
+
       if (String(webhookLead.status_id) !== SUCCESS_STATUS_ID) continue;
 
       console.log(`Сделка #${webhookLead.id} перешла в "Успешно реализовано" — запрашиваю детали...`);
