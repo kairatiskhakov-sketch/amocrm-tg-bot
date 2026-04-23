@@ -7,8 +7,8 @@ export const config = {
   },
 };
 
-// ID этапа "Успешно реализовано" в amoCRM (стандартный = 142)
-const SUCCESS_STATUS_ID = '142';
+// ID этапа "Успешно реализовано" в amoCRM
+const SUCCESS_STATUS_ID = '67253182';
 
 // ─── Читаем raw body из запроса ───────────────────────────────────────────────
 async function getRawBody(req) {
