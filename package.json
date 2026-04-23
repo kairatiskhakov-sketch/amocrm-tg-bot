@@ -1,0 +1,9 @@
+{
+  "name": "amocrm-telegram-bot",
+  "version": "1.0.0",
+  "description": "Telegram-уведомления о продажах из amoCRM через Vercel Serverless",
+  "type": "module",
+  "dependencies": {
+    "qs": "^6.12.0"
+  }
+}
