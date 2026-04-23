@@ -22,48 +22,56 @@ async function getRawBody(req) {
 
 // ─── Запрос к amoCRM API: полные данные сделки + контакты + теги ──────────────
 async function getLeadDetails(leadId) {
-  const subdomain = process.env.AMO_SUBDOMAIN;   // uldanaavtoschool
-  const token = process.env.AMO_ACCESS_TOKEN;
+  try {
+    const subdomain = process.env.AMO_SUBDOMAIN;
+    const token = process.env.AMO_ACCESS_TOKEN;
+    if (!subdomain || !token) return null;
 
-  if (!subdomain || !token) {
-    throw new Error('AMO_SUBDOMAIN или AMO_ACCESS_TOKEN не заданы');
+    const url = `https://${subdomain}.amocrm.ru/api/v4/leads/${leadId}?with=contacts,tags`;
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.warn(`amoCRM lead API: ${response.status} для сделки #${leadId}`);
+      return null;
+    }
+
+    const text = await response.text();
+    if (!text) return null;
+    return JSON.parse(text);
+  } catch (e) {
+    console.warn('getLeadDetails error:', e.message);
+    return null;
   }
-
-  const url = `https://${subdomain}.amocrm.ru/api/v4/leads/${leadId}?with=contacts,tags`;
-
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`amoCRM API error ${response.status}: ${err}`);
-  }
-
-  return response.json();
 }
 
 // ─── Запрос к amoCRM API: имя контакта по ID ─────────────────────────────────
 async function getContactName(contactId) {
-  const subdomain = process.env.AMO_SUBDOMAIN;
-  const token = process.env.AMO_ACCESS_TOKEN;
+  try {
+    const subdomain = process.env.AMO_SUBDOMAIN;
+    const token = process.env.AMO_ACCESS_TOKEN;
 
-  const url = `https://${subdomain}.amocrm.ru/api/v4/contacts/${contactId}`;
+    const url = `https://${subdomain}.amocrm.ru/api/v4/contacts/${contactId}`;
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) return null;
-
-  const data = await response.json();
-  return data.name || null;
+    if (!response.ok) return null;
+    const text = await response.text();
+    if (!text) return null;
+    const data = JSON.parse(text);
+    return data.name || null;
+  } catch (e) {
+    console.warn('getContactName error:', e.message);
+    return null;
+  }
 }
 
 // ─── Извлечь значение кастомного поля по ключевым словам ─────────────────────
@@ -78,20 +86,20 @@ function getCustomField(fields, keywords) {
 }
 
 // ─── Форматируем сообщение для Telegram ───────────────────────────────────────
-function formatMessage(lead, contactName) {
-  const id = lead.id || '—';
-  const name = lead.name || '—';
-  const price = lead.price
-    ? Number(lead.price).toLocaleString('ru-RU') + ' ₸'
+function formatMessage(webhookLead, fullLead, contactName) {
+  const id = webhookLead.id || '—';
+  const name = fullLead?.name || webhookLead.name || '—';
+  const price = (fullLead?.price || webhookLead.price)
+    ? Number(fullLead?.price || webhookLead.price).toLocaleString('ru-RU') + ' ₸'
     : '—';
 
-  const fields = lead.custom_fields_values || [];
+  const fields = fullLead?.custom_fields_values || [];
 
   // Ищем поле «Товар» / «Услуга» / «Product»
   const product = getCustomField(fields, ['товар', 'product', 'услуга', 'курс', 'программа']);
 
   // Теги сделки
-  const tags = lead._embedded?.tags?.map((t) => t.name).join(', ') || '—';
+  const tags = fullLead?._embedded?.tags?.map((t) => t.name).join(', ') || '—';
 
   const contact = contactName || '—';
 
@@ -164,20 +172,22 @@ export default async function handler(req, res) {
       console.log(`Сделка #${webhookLead.id} перешла в "Успешно реализовано" — запрашиваю детали...`);
 
       // Запрашиваем полные данные сделки из amoCRM API
-      const lead = await getLeadDetails(webhookLead.id);
+      const fullLead = await getLeadDetails(webhookLead.id);
 
       // Получаем имя первого контакта
       let contactName = null;
-      const contacts = lead._embedded?.contacts || [];
-      if (contacts.length > 0) {
-        contactName = await getContactName(contacts[0].id);
+      if (fullLead) {
+        const contacts = fullLead._embedded?.contacts || [];
+        if (contacts.length > 0) {
+          contactName = await getContactName(contacts[0].id);
+        }
       }
 
-      const message = formatMessage(lead, contactName);
+      const message = formatMessage(webhookLead, fullLead, contactName);
       await sendTelegramMessage(message);
       notified++;
 
-      console.log(`✅ Уведомление отправлено по сделке #${lead.id}`);
+      console.log(`✅ Уведомление отправлено по сделке #${webhookLead.id}`);
     }
 
     return res.status(200).json({ ok: true, notified });
