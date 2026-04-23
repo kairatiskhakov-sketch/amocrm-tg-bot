@@ -1,16 +1,17 @@
 import qs from 'qs';
 
-// Отключаем стандартный body parser Vercel — парсим вручную
 export const config = {
   api: {
     bodyParser: false,
   },
 };
 
-// ID этапа "Успешно реализовано" в amoCRM
-const SUCCESS_STATUS_ID = '67253182';
+// ID этапов "Успешно реализовано" — можно указать несколько через запятую в Vercel ENV
+const SUCCESS_STATUS_IDS = (process.env.SUCCESS_STATUS_IDS || '67253182')
+  .split(',')
+  .map((s) => s.trim());
 
-// ─── Читаем raw body из запроса ───────────────────────────────────────────────
+// ─── Читаем raw body ──────────────────────────────────────────────────────────
 async function getRawBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -20,7 +21,7 @@ async function getRawBody(req) {
   });
 }
 
-// ─── Запрос к amoCRM API: полные данные сделки + контакты + теги ──────────────
+// ─── amoCRM API: полные данные сделки ────────────────────────────────────────
 async function getLeadDetails(leadId) {
   try {
     const subdomain = process.env.AMO_SUBDOMAIN;
@@ -29,38 +30,32 @@ async function getLeadDetails(leadId) {
 
     const url = `https://${subdomain}.amocrm.ru/api/v4/leads/${leadId}?with=contacts,tags`;
     const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!response.ok) {
-      console.warn(`amoCRM lead API: ${response.status} для сделки #${leadId}`);
+      console.warn(`amoCRM leads API ${response.status} для #${leadId}`);
       return null;
     }
-
     const text = await response.text();
     if (!text) return null;
     return JSON.parse(text);
   } catch (e) {
-    console.warn('getLeadDetails error:', e.message);
+    console.warn('getLeadDetails:', e.message);
     return null;
   }
 }
 
-// ─── Запрос к amoCRM API: имя контакта по ID ─────────────────────────────────
-async function getContactName(contactId) {
+// ─── amoCRM API: имя менеджера по user_id ────────────────────────────────────
+async function getManagerName(userId) {
   try {
     const subdomain = process.env.AMO_SUBDOMAIN;
     const token = process.env.AMO_ACCESS_TOKEN;
+    if (!userId) return null;
 
-    const url = `https://${subdomain}.amocrm.ru/api/v4/contacts/${contactId}`;
+    const url = `https://${subdomain}.amocrm.ru/api/v4/users/${userId}`;
     const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!response.ok) return null;
@@ -69,77 +64,104 @@ async function getContactName(contactId) {
     const data = JSON.parse(text);
     return data.name || null;
   } catch (e) {
-    console.warn('getContactName error:', e.message);
+    console.warn('getManagerName:', e.message);
     return null;
   }
 }
 
-// ─── Извлечь значение кастомного поля по ключевым словам ─────────────────────
-function getCustomField(fields, keywords) {
-  if (!fields || !Array.isArray(fields)) return '—';
-  const field = fields.find((f) =>
-    keywords.some((kw) => f.name?.toLowerCase().includes(kw))
-  );
+// ─── Найти кастомное поле по ключевым словам ─────────────────────────────────
+function getField(fields, keywords) {
+  if (!Array.isArray(fields)) return null;
+  return fields.find((f) =>
+    keywords.some((kw) => f.field_name?.toLowerCase().includes(kw.toLowerCase()))
+  ) || null;
+}
+
+function getFieldValue(fields, keywords) {
+  const field = getField(fields, keywords);
   if (!field) return '—';
   const vals = field.values || [];
   return vals.map((v) => v.value).filter(Boolean).join(', ') || '—';
 }
 
-// ─── Форматируем сообщение для Telegram ───────────────────────────────────────
-function formatMessage(webhookLead, fullLead, contactName) {
-  const id = webhookLead.id || '—';
-  const name = fullLead?.name || webhookLead.name || '—';
-  const price = (fullLead?.price || webhookLead.price)
-    ? Number(fullLead?.price || webhookLead.price).toLocaleString('ru-RU') + ' ₸'
-    : '—';
+// ─── Форматирование даты (Unix timestamp → DD.MM.YYYY) ────────────────────────
+function formatDate(value) {
+  if (!value || value === '—') return '—';
+  const ts = Number(value);
+  if (!ts) return value;
+  const d = new Date(ts * 1000);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}.${month}.${year}`;
+}
 
+// ─── Форматирование суммы ─────────────────────────────────────────────────────
+function formatMoney(value) {
+  if (!value || value === '—') return '—';
+  const num = Number(String(value).replace(/\s/g, ''));
+  if (isNaN(num)) return value;
+  return num.toLocaleString('ru-RU') + ' ₸';
+}
+
+// ─── Формируем сообщение ──────────────────────────────────────────────────────
+function formatMessage(fullLead, managerName) {
   const fields = fullLead?.custom_fields_values || [];
 
-  // Ищем поле «Товар» / «Услуга» / «Product»
-  const product = getCustomField(fields, ['товар', 'product', 'услуга', 'курс', 'программа']);
+  // DEBUG: логируем все поля чтобы видеть точные названия
+  console.log('FIELDS:', JSON.stringify(fields.map(f => ({ name: f.field_name, val: f.values?.[0]?.value }))));
 
-  // Теги сделки
-  const tags = fullLead?._embedded?.tags?.map((t) => t.name).join(', ') || '—';
+  const sanatorium  = getFieldValue(fields, ['санатор', 'отель', 'объект', 'resort']);
+  const city        = getFieldValue(fields, ['город', 'city']);
+  const checkIn     = formatDate(getFieldValue(fields, ['заезд', 'check-in', 'прибыти', 'дата заезд']));
+  const checkOut    = formatDate(getFieldValue(fields, ['выезд', 'check-out', 'отбыти', 'дата выезд']));
+  const adults      = getFieldValue(fields, ['взрослы', 'adult']);
+  const children    = getFieldValue(fields, ['дет', 'ребен', 'child']);
+  const prepayment  = formatMoney(getFieldValue(fields, ['предоплат', 'аванс', 'prepay']));
+  const remainder   = formatMoney(getFieldValue(fields, ['остаток', 'remain', 'доплат']));
+  const comment     = getFieldValue(fields, ['коммент', 'примечан', 'заметк', 'note']);
+  const manager     = managerName || '—';
 
-  const contact = contactName || '—';
+  // Форматируем комментарий — каждую строку с тире
+  const commentLines = comment !== '—'
+    ? comment.split(/[\n,;]/).map(l => l.trim()).filter(Boolean).map(l => `— ${l}`).join('\n')
+    : '—';
 
   return (
-    `🎉 *Новая продажа!*\n\n` +
-    `🔢 Сделка №${id}: ${name}\n` +
-    `💰 Сумма: ${price}\n` +
-    `🛍 Товар: ${product}\n` +
-    `👤 Клиент: ${contact}\n` +
-    `🏷 Теги: ${tags}`
+    `⸻\n` +
+    `🏨 *НОВАЯ БРОНЬ*\n\n` +
+    `📍 Санаторий: ${sanatorium}\n` +
+    `🏙 Город: ${city}\n` +
+    `📅 Заезд: ${checkIn}\n` +
+    `📆 Выезд: ${checkOut}\n` +
+    `👥 Гости:\n` +
+    `👤 Взрослые: ${adults}\n` +
+    `🧒 Дети: ${children}\n` +
+    `💳 Оплата:\n` +
+    `💰 Предоплата: ${prepayment}\n` +
+    `💵 Остаток: ${remainder}\n` +
+    `🧑 Менеджер: ${manager}\n` +
+    `📝 Комментарий:\n${commentLines}\n` +
+    `⸻`
   );
 }
 
-// ─── Отправка сообщения в Telegram ────────────────────────────────────────────
+// ─── Отправка в Telegram ──────────────────────────────────────────────────────
 async function sendTelegramMessage(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) throw new Error('Не заданы TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID');
 
-  if (!token || !chatId) {
-    throw new Error('TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не заданы');
-  }
-
-  const response = await fetch(
-    `https://api.telegram.org/bot${token}/sendMessage`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: 'Markdown',
-      }),
-    }
-  );
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
+  });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Telegram API error: ${errorBody}`);
+    const err = await response.text();
+    throw new Error(`Telegram API error: ${err}`);
   }
-
   return response.json();
 }
 
@@ -151,11 +173,7 @@ export default async function handler(req, res) {
 
   try {
     const rawBody = await getRawBody(req);
-
-    // amoCRM шлёт application/x-www-form-urlencoded
-    // с вложенными ключами вида leads[status][0][name]
     const body = qs.parse(rawBody);
-
     const leads = body?.leads?.status;
 
     if (!leads) {
@@ -163,30 +181,19 @@ export default async function handler(req, res) {
     }
 
     const leadsArray = Array.isArray(leads) ? leads : Object.values(leads);
-
     let notified = 0;
 
     for (const webhookLead of leadsArray) {
-      // DEBUG: логируем что пришло от amoCRM
       console.log(`DEBUG lead #${webhookLead.id} status_id=${webhookLead.status_id} pipeline_id=${webhookLead.pipeline_id}`);
 
-      if (String(webhookLead.status_id) !== SUCCESS_STATUS_ID) continue;
+      if (!SUCCESS_STATUS_IDS.includes(String(webhookLead.status_id))) continue;
 
-      console.log(`Сделка #${webhookLead.id} перешла в "Успешно реализовано" — запрашиваю детали...`);
+      console.log(`Сделка #${webhookLead.id} → запрашиваю данные из amoCRM...`);
 
-      // Запрашиваем полные данные сделки из amoCRM API
       const fullLead = await getLeadDetails(webhookLead.id);
+      const managerName = await getManagerName(fullLead?.responsible_user_id);
 
-      // Получаем имя первого контакта
-      let contactName = null;
-      if (fullLead) {
-        const contacts = fullLead._embedded?.contacts || [];
-        if (contacts.length > 0) {
-          contactName = await getContactName(contacts[0].id);
-        }
-      }
-
-      const message = formatMessage(webhookLead, fullLead, contactName);
+      const message = formatMessage(fullLead, managerName);
       await sendTelegramMessage(message);
       notified++;
 
@@ -195,7 +202,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ ok: true, notified });
   } catch (error) {
-    console.error('❌ Ошибка обработки вебхука:', error.message);
+    console.error('❌ Ошибка:', error.message);
     return res.status(500).json({ error: error.message });
   }
 }
