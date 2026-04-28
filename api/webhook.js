@@ -15,14 +15,6 @@ const BOOKING_STATUS_IDS = (process.env.SUCCESS_STATUS_IDS || '85481598')
 const DRIVERS_STATUS_IDS = (process.env.DRIVERS_STATUS_IDS || '85481606')
   .split(',').map((s) => s.trim());
 
-// Защита от дублей — 30 секунд
-const recentlyNotified = new Map();
-function isDuplicate(key) {
-  const now = Date.now();
-  if (recentlyNotified.has(key) && now - recentlyNotified.get(key) < 30000) return true;
-  recentlyNotified.set(key, now);
-  return false;
-}
 
 // ─── Читаем raw body ──────────────────────────────────────────────────────────
 async function getRawBody(req) {
@@ -228,12 +220,6 @@ export default async function handler(req, res) {
       const isBooking = BOOKING_STATUS_IDS.includes(sid);
       const isDrivers = DRIVERS_STATUS_IDS.includes(sid);
       if (!isBooking && !isDrivers) continue;
-
-      const dedupKey = `${webhookLead.id}-${sid}`;
-      if (isDuplicate(dedupKey)) {
-        console.log(`⏭ Дубль — пропускаем #${webhookLead.id}`);
-        continue;
-      }
 
       console.log(`Сделка #${webhookLead.id} → запрашиваю данные...`);
       const fullLead = await getLeadDetails(webhookLead.id);
