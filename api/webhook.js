@@ -171,8 +171,8 @@ function formatDriversMessage(fullLead, contact) {
   const clientPhone = contact?.phone || '—';
 
   return (
-    `Сәлеметсіз бе\\! Здравствуйте\\!\n\n` +
-    `Мы хотели бы уведомить вас о предстоящем заезде гостей в наш санаторий\\.\n\n` +
+    `Сәлеметсіз бе! Здравствуйте!\n\n` +
+    `Мы хотели бы уведомить вас о предстоящем заезде гостей в наш санаторий.\n\n` +
     `👤 Фамилия Имя: ${clientName}\n` +
     `🏨 Санаторий: ${sanatorium}\n` +
     `📅 Дата заезда: ${checkIn}\n` +
@@ -251,7 +251,7 @@ export default async function handler(req, res) {
       // Уведомление водителям
       if (isDrivers) {
         const msg = formatDriversMessage(fullLead, contact);
-        await sendToChat(process.env.TELEGRAM_DRIVERS_CHAT_ID, msg, true);
+        await sendToChat(process.env.TELEGRAM_DRIVERS_CHAT_ID, msg, false);
         console.log(`✅ Уведомление отправлено водителям #${webhookLead.id}`);
       }
 
