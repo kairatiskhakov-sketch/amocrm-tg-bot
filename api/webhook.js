@@ -200,6 +200,16 @@ async function sendToChat(chatId, text, useMarkdownV2 = false) {
   return response.json();
 }
 
+// ─── Дедупликация (deal + status, 30 сек) ────────────────────────────────────
+const recentlyNotified = new Map();
+function isDuplicate(leadId, statusId) {
+  const key = `${leadId}_${statusId}`;
+  const now = Date.now();
+  if (recentlyNotified.has(key) && now - recentlyNotified.get(key) < 30000) return true;
+  recentlyNotified.set(key, now);
+  return false;
+}
+
 // ─── Основной обработчик ──────────────────────────────────────────────────────
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
@@ -220,6 +230,10 @@ export default async function handler(req, res) {
       const isBooking = BOOKING_STATUS_IDS.includes(sid);
       const isDrivers = DRIVERS_STATUS_IDS.includes(sid);
       if (!isBooking && !isDrivers) continue;
+      if (isDuplicate(webhookLead.id, sid)) {
+        console.log(`⏭ Дубль пропущен #${webhookLead.id} status=${sid}`);
+        continue;
+      }
 
       console.log(`Сделка #${webhookLead.id} → запрашиваю данные...`);
       const fullLead = await getLeadDetails(webhookLead.id);
