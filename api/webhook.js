@@ -111,46 +111,43 @@ function formatMessage(fullLead, managerName) {
   // DEBUG: логируем все поля чтобы видеть точные названия
   console.log('FIELDS:', JSON.stringify(fields.map(f => ({ name: f.field_name, val: f.values?.[0]?.value }))));
 
-  const sanatorium  = getFieldValue(fields, ['санатор', 'отель', 'объект', 'resort']);
-  const city        = getFieldValue(fields, ['город', 'city']);
-  const checkIn     = formatDate(getFieldValue(fields, ['заезд', 'check-in', 'прибыти', 'дата заезд']));
-  const checkOut    = formatDate(getFieldValue(fields, ['выезд', 'check-out', 'отбыти', 'дата выезд']));
-  const adults      = getFieldValue(fields, ['взрослы', 'adult']);
-  const children    = getFieldValue(fields, ['дет', 'ребен', 'child']);
-  const comment     = getFieldValue(fields, ['коммент', 'примечан', 'заметк', 'note']);
+  const sanatorium  = getFieldValue(fields, ['санатори', 'санатор', 'отель', 'объект']);
+  const city        = getFieldValue(fields, ['город']);
+  const checkIn     = formatDate(getFieldValue(fields, ['дата заезда', 'заезд', 'дата заезд']));
+  const checkOut    = formatDate(getFieldValue(fields, ['дата выезда', 'выезд', 'дата выезд']));
+  const totalGuests = getFieldValue(fields, ['кол-во человек', 'кол-во гостей', 'всего']);
+  const adults      = getFieldValue(fields, ['кол-во взрослых', 'взрослы', 'adult']);
+  const children    = getFieldValue(fields, ['кол-во детей', 'дет', 'ребен', 'child']);
+  const comment     = getFieldValue(fields, ['комментари', 'коммент', 'примечан', 'заметк']);
   const manager     = managerName || '—';
+
+  // Бюджет (системное поле price = общая сумма оплаты)
+  const budget = Number(fullLead?.price) || 0;
+  const totalPayment = formatMoney(budget);
 
   // Предоплата из кастомного поля
   const prepaymentRaw = getFieldValue(fields, ['предоплат', 'аванс', 'prepay']);
   const prepaymentNum = Number(String(prepaymentRaw).replace(/\s/g, '')) || 0;
   const prepayment = formatMoney(prepaymentRaw);
 
-  // Остаток = Бюджет (системное поле price) − Предоплата
-  const budget = Number(fullLead?.price) || 0;
+  // Остаток = Бюджет − Предоплата
   const remainderNum = budget - prepaymentNum;
   const remainder = remainderNum >= 0 ? formatMoney(remainderNum) : '—';
 
-  // Форматируем комментарий — каждую строку с тире
-  const commentLines = comment !== '—'
-    ? comment.split(/[\n,;]/).map(l => l.trim()).filter(Boolean).map(l => `— ${l}`).join('\n')
-    : '—';
-
   return (
-    `⸻\n` +
     `🏨 *НОВАЯ БРОНЬ*\n\n` +
     `📍 Санаторий: ${sanatorium}\n` +
     `🏙 Город: ${city}\n` +
     `📅 Заезд: ${checkIn}\n` +
     `📆 Выезд: ${checkOut}\n` +
-    `👥 Гости:\n` +
+    `👥 Гости: ${totalGuests}\n` +
     `👤 Взрослые: ${adults}\n` +
     `🧒 Дети: ${children}\n` +
-    `💳 Оплата:\n` +
+    `💳 Оплата: ${totalPayment}\n` +
     `💰 Предоплата: ${prepayment}\n` +
     `💵 Остаток: ${remainder}\n` +
     `🧑 Менеджер: ${manager}\n` +
-    `📝 Комментарий:\n${commentLines}\n` +
-    `⸻`
+    `📝 Комментарий: ${comment}`
   );
 }
 
