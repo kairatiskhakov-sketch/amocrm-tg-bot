@@ -6,8 +6,8 @@ export const config = {
   },
 };
 
-// ID этапов "Успешно реализовано" — можно указать несколько через запятую в Vercel ENV
-const SUCCESS_STATUS_IDS = (process.env.SUCCESS_STATUS_IDS || '67253182')
+// ID этапов — можно указать несколько через запятую в Vercel ENV (SUCCESS_STATUS_IDS)
+const SUCCESS_STATUS_IDS = (process.env.SUCCESS_STATUS_IDS || '85481598')
   .split(',')
   .map((s) => s.trim());
 
@@ -117,10 +117,18 @@ function formatMessage(fullLead, managerName) {
   const checkOut    = formatDate(getFieldValue(fields, ['выезд', 'check-out', 'отбыти', 'дата выезд']));
   const adults      = getFieldValue(fields, ['взрослы', 'adult']);
   const children    = getFieldValue(fields, ['дет', 'ребен', 'child']);
-  const prepayment  = formatMoney(getFieldValue(fields, ['предоплат', 'аванс', 'prepay']));
-  const remainder   = formatMoney(getFieldValue(fields, ['остаток', 'remain', 'доплат']));
   const comment     = getFieldValue(fields, ['коммент', 'примечан', 'заметк', 'note']);
   const manager     = managerName || '—';
+
+  // Предоплата из кастомного поля
+  const prepaymentRaw = getFieldValue(fields, ['предоплат', 'аванс', 'prepay']);
+  const prepaymentNum = Number(String(prepaymentRaw).replace(/\s/g, '')) || 0;
+  const prepayment = formatMoney(prepaymentRaw);
+
+  // Остаток = Бюджет (системное поле price) − Предоплата
+  const budget = Number(fullLead?.price) || 0;
+  const remainderNum = budget - prepaymentNum;
+  const remainder = remainderNum >= 0 ? formatMoney(remainderNum) : '—';
 
   // Форматируем комментарий — каждую строку с тире
   const commentLines = comment !== '—'
