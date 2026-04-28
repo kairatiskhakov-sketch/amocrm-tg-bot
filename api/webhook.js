@@ -11,6 +11,18 @@ const SUCCESS_STATUS_IDS = (process.env.SUCCESS_STATUS_IDS || '85481598')
   .split(',')
   .map((s) => s.trim());
 
+// Защита от дублей — храним ID обработанных сделок на 30 секунд
+const recentlyNotified = new Map();
+function isDuplicate(leadId) {
+  const now = Date.now();
+  if (recentlyNotified.has(leadId)) {
+    const ts = recentlyNotified.get(leadId);
+    if (now - ts < 30000) return true; // 30 секунд
+  }
+  recentlyNotified.set(leadId, now);
+  return false;
+}
+
 // ─── Читаем raw body ──────────────────────────────────────────────────────────
 async function getRawBody(req) {
   return new Promise((resolve, reject) => {
@@ -192,6 +204,10 @@ export default async function handler(req, res) {
       console.log(`DEBUG lead #${webhookLead.id} status_id=${webhookLead.status_id} pipeline_id=${webhookLead.pipeline_id}`);
 
       if (!SUCCESS_STATUS_IDS.includes(String(webhookLead.status_id))) continue;
+      if (isDuplicate(webhookLead.id)) {
+        console.log(`⏭ Дубль — сделка #${webhookLead.id} уже обработана, пропускаем`);
+        continue;
+      }
 
       console.log(`Сделка #${webhookLead.id} → запрашиваю данные из amoCRM...`);
 
