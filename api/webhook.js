@@ -6,20 +6,21 @@ export const config = {
   },
 };
 
-// ID этапов — можно указать несколько через запятую в Vercel ENV (SUCCESS_STATUS_IDS)
-const SUCCESS_STATUS_IDS = (process.env.SUCCESS_STATUS_IDS || '85481598')
-  .split(',')
-  .map((s) => s.trim());
+// ─── Этапы ────────────────────────────────────────────────────────────────────
+// Канал менеджеров (НОВАЯ БРОНЬ)
+const BOOKING_STATUS_IDS = (process.env.SUCCESS_STATUS_IDS || '85481598')
+  .split(',').map((s) => s.trim());
 
-// Защита от дублей — храним ID обработанных сделок на 30 секунд
+// Канал водителей (уведомление о заезде)
+const DRIVERS_STATUS_IDS = (process.env.DRIVERS_STATUS_IDS || '85481606')
+  .split(',').map((s) => s.trim());
+
+// Защита от дублей — 30 секунд
 const recentlyNotified = new Map();
-function isDuplicate(leadId) {
+function isDuplicate(key) {
   const now = Date.now();
-  if (recentlyNotified.has(leadId)) {
-    const ts = recentlyNotified.get(leadId);
-    if (now - ts < 30000) return true; // 30 секунд
-  }
-  recentlyNotified.set(leadId, now);
+  if (recentlyNotified.has(key) && now - recentlyNotified.get(key) < 30000) return true;
+  recentlyNotified.set(key, now);
   return false;
 }
 
@@ -41,24 +42,40 @@ async function getLeadDetails(leadId) {
     if (!subdomain || !token) return null;
 
     const url = `https://${subdomain}.amocrm.ru/api/v4/leads/${leadId}?with=contacts,tags`;
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
 
-    if (!response.ok) {
-      console.warn(`amoCRM leads API ${response.status} для #${leadId}`);
-      return null;
-    }
+    if (!response.ok) { console.warn(`amoCRM leads ${response.status} #${leadId}`); return null; }
     const text = await response.text();
-    if (!text) return null;
-    return JSON.parse(text);
-  } catch (e) {
-    console.warn('getLeadDetails:', e.message);
-    return null;
-  }
+    return text ? JSON.parse(text) : null;
+  } catch (e) { console.warn('getLeadDetails:', e.message); return null; }
 }
 
-// ─── amoCRM API: имя менеджера по user_id ────────────────────────────────────
+// ─── amoCRM API: контакт (имя + телефон) ─────────────────────────────────────
+async function getContact(contactId) {
+  try {
+    const subdomain = process.env.AMO_SUBDOMAIN;
+    const token = process.env.AMO_ACCESS_TOKEN;
+    if (!contactId) return null;
+
+    const url = `https://${subdomain}.amocrm.ru/api/v4/contacts/${contactId}`;
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+
+    if (!response.ok) return null;
+    const text = await response.text();
+    if (!text) return null;
+    const data = JSON.parse(text);
+
+    // Ищем номер телефона в кастомных полях контакта
+    const phoneField = (data.custom_fields_values || []).find(
+      (f) => f.field_code === 'PHONE' || f.field_name?.toLowerCase().includes('телефон') || f.field_name?.toLowerCase().includes('phone')
+    );
+    const phone = phoneField?.values?.[0]?.value || '—';
+
+    return { name: data.name || '—', phone };
+  } catch (e) { console.warn('getContact:', e.message); return null; }
+}
+
+// ─── amoCRM API: имя менеджера ────────────────────────────────────────────────
 async function getManagerName(userId) {
   try {
     const subdomain = process.env.AMO_SUBDOMAIN;
@@ -66,85 +83,59 @@ async function getManagerName(userId) {
     if (!userId) return null;
 
     const url = `https://${subdomain}.amocrm.ru/api/v4/users/${userId}`;
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
 
     if (!response.ok) return null;
     const text = await response.text();
     if (!text) return null;
-    const data = JSON.parse(text);
-    return data.name || null;
-  } catch (e) {
-    console.warn('getManagerName:', e.message);
-    return null;
-  }
+    return JSON.parse(text).name || null;
+  } catch (e) { console.warn('getManagerName:', e.message); return null; }
 }
 
-// ─── Найти кастомное поле по ключевым словам ─────────────────────────────────
-function getField(fields, keywords) {
-  if (!Array.isArray(fields)) return null;
-  return fields.find((f) =>
-    keywords.some((kw) => f.field_name?.toLowerCase().includes(kw.toLowerCase()))
-  ) || null;
-}
-
+// ─── Хелперы для полей ────────────────────────────────────────────────────────
 function getFieldValue(fields, keywords) {
-  const field = getField(fields, keywords);
+  if (!Array.isArray(fields)) return '—';
+  const field = fields.find((f) =>
+    keywords.some((kw) => f.field_name?.toLowerCase().includes(kw.toLowerCase()))
+  );
   if (!field) return '—';
-  const vals = field.values || [];
-  return vals.map((v) => v.value).filter(Boolean).join(', ') || '—';
+  return (field.values || []).map((v) => v.value).filter(Boolean).join(', ') || '—';
 }
 
-// ─── Форматирование даты (Unix timestamp → DD.MM.YYYY) ────────────────────────
 function formatDate(value) {
   if (!value || value === '—') return '—';
   const ts = Number(value);
   if (!ts) return value;
   const d = new Date(ts * 1000);
-  const day = String(d.getDate()).padStart(2, '0');
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const year = d.getFullYear();
-  return `${day}.${month}.${year}`;
+  return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`;
 }
 
-// ─── Форматирование суммы ─────────────────────────────────────────────────────
 function formatMoney(value) {
-  if (!value || value === '—') return '—';
+  if (!value && value !== 0) return '—';
   const num = Number(String(value).replace(/\s/g, ''));
-  if (isNaN(num)) return value;
+  if (isNaN(num)) return String(value);
   return num.toLocaleString('ru-RU') + ' ₸';
 }
 
-// ─── Формируем сообщение ──────────────────────────────────────────────────────
-function formatMessage(fullLead, managerName) {
+// ─── Сообщение для менеджеров (НОВАЯ БРОНЬ) ──────────────────────────────────
+function formatBookingMessage(fullLead, managerName) {
   const fields = fullLead?.custom_fields_values || [];
-
-  // DEBUG: логируем все поля чтобы видеть точные названия
   console.log('FIELDS:', JSON.stringify(fields.map(f => ({ name: f.field_name, val: f.values?.[0]?.value }))));
 
   const sanatorium  = getFieldValue(fields, ['санатори', 'санатор', 'отель', 'объект']);
   const city        = getFieldValue(fields, ['город']);
-  const checkIn     = formatDate(getFieldValue(fields, ['дата заезда', 'заезд', 'дата заезд']));
-  const checkOut    = formatDate(getFieldValue(fields, ['дата выезда', 'выезд', 'дата выезд']));
+  const checkIn     = formatDate(getFieldValue(fields, ['дата заезда', 'заезд']));
+  const checkOut    = formatDate(getFieldValue(fields, ['дата выезда', 'выезд']));
   const totalGuests = getFieldValue(fields, ['кол-во человек', 'кол-во гостей', 'всего']);
-  const adults      = getFieldValue(fields, ['кол-во взрослых', 'взрослы', 'adult']);
-  const children    = getFieldValue(fields, ['кол-во детей', 'дет', 'ребен', 'child']);
-  const comment     = getFieldValue(fields, ['комментари', 'коммент', 'примечан', 'заметк']);
+  const adults      = getFieldValue(fields, ['кол-во взрослых', 'взрослы']);
+  const children    = getFieldValue(fields, ['кол-во детей', 'дет', 'ребен']);
+  const comment     = getFieldValue(fields, ['комментари', 'коммент', 'примечан']);
   const manager     = managerName || '—';
 
-  // Бюджет (системное поле price = общая сумма оплаты)
   const budget = Number(fullLead?.price) || 0;
-  const totalPayment = formatMoney(budget);
-
-  // Предоплата из кастомного поля
-  const prepaymentRaw = getFieldValue(fields, ['предоплат', 'аванс', 'prepay']);
+  const prepaymentRaw = getFieldValue(fields, ['предоплат', 'аванс']);
   const prepaymentNum = Number(String(prepaymentRaw).replace(/\s/g, '')) || 0;
-  const prepayment = formatMoney(prepaymentRaw);
-
-  // Остаток = Бюджет − Предоплата
-  const remainderNum = budget - prepaymentNum;
-  const remainder = remainderNum >= 0 ? formatMoney(remainderNum) : '—';
+  const remainder = budget - prepaymentNum;
 
   return (
     `🏨 *НОВАЯ БРОНЬ*\n\n` +
@@ -155,24 +146,59 @@ function formatMessage(fullLead, managerName) {
     `👥 Гости: ${totalGuests}\n` +
     `👤 Взрослые: ${adults}\n` +
     `🧒 Дети: ${children}\n` +
-    `💳 Оплата: ${totalPayment}\n` +
-    `💰 Предоплата: ${prepayment}\n` +
-    `💵 Остаток: ${remainder}\n` +
+    `💳 Оплата: ${formatMoney(budget)}\n` +
+    `💰 Предоплата: ${formatMoney(prepaymentRaw)}\n` +
+    `💵 Остаток: ${remainder >= 0 ? formatMoney(remainder) : '—'}\n` +
     `🧑 Менеджер: ${manager}\n` +
     `📝 Комментарий: ${comment}`
   );
 }
 
+// ─── Сообщение для водителей ──────────────────────────────────────────────────
+function formatDriversMessage(fullLead, contact) {
+  const fields = fullLead?.custom_fields_values || [];
+
+  const sanatorium  = getFieldValue(fields, ['санатори', 'санатор', 'отель', 'объект']);
+  const city        = getFieldValue(fields, ['город']);
+  const checkIn     = formatDate(getFieldValue(fields, ['дата заезда', 'заезд']));
+  const transport   = getFieldValue(fields, ['тип транспорта', 'транспорт']);
+  const trainTicket = getFieldValue(fields, ['билет жд', 'жд билет', 'поезд']);
+  const airTicket   = getFieldValue(fields, ['авиа билет', 'авиа', 'самолет']);
+  const totalGuests = getFieldValue(fields, ['кол-во человек', 'кол-во гостей', 'всего']);
+  const children    = getFieldValue(fields, ['кол-во детей', 'дет', 'ребен']);
+
+  const clientName  = contact?.name || '—';
+  const clientPhone = contact?.phone || '—';
+
+  return (
+    `Сәлеметсіз бе\\! Здравствуйте\\!\n\n` +
+    `Мы хотели бы уведомить вас о предстоящем заезде гостей в наш санаторий\\.\n\n` +
+    `👤 Фамилия Имя: ${clientName}\n` +
+    `🏨 Санаторий: ${sanatorium}\n` +
+    `📅 Дата заезда: ${checkIn}\n` +
+    `🏙 Город: ${city}\n` +
+    `🚌 Тип транспорта: ${transport}\n` +
+    `🚂 Билет ЖД: ${trainTicket}\n` +
+    `✈️ Авиа Билет: ${airTicket}\n` +
+    `👥 Количество гостей: ${totalGuests}\n` +
+    `🧒 Количество детей: ${children}\n` +
+    `📞 Номер для связи: ${clientPhone}`
+  );
+}
+
 // ─── Отправка в Telegram ──────────────────────────────────────────────────────
-async function sendTelegramMessage(text) {
+async function sendToChat(chatId, text, useMarkdownV2 = false) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) throw new Error('Не заданы TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID');
+  if (!token || !chatId) throw new Error('Не задан TELEGRAM_BOT_TOKEN или chatId');
 
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: useMarkdownV2 ? 'MarkdownV2' : 'Markdown',
+    }),
   });
 
   if (!response.ok) {
@@ -184,41 +210,52 @@ async function sendTelegramMessage(text) {
 
 // ─── Основной обработчик ──────────────────────────────────────────────────────
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
   try {
     const rawBody = await getRawBody(req);
     const body = qs.parse(rawBody);
     const leads = body?.leads?.status;
-
-    if (!leads) {
-      return res.status(200).json({ ok: true, message: 'No status leads' });
-    }
+    if (!leads) return res.status(200).json({ ok: true, message: 'No status leads' });
 
     const leadsArray = Array.isArray(leads) ? leads : Object.values(leads);
     let notified = 0;
 
     for (const webhookLead of leadsArray) {
-      console.log(`DEBUG lead #${webhookLead.id} status_id=${webhookLead.status_id} pipeline_id=${webhookLead.pipeline_id}`);
+      const sid = String(webhookLead.status_id);
+      console.log(`DEBUG lead #${webhookLead.id} status_id=${sid} pipeline_id=${webhookLead.pipeline_id}`);
 
-      if (!SUCCESS_STATUS_IDS.includes(String(webhookLead.status_id))) continue;
-      if (isDuplicate(webhookLead.id)) {
-        console.log(`⏭ Дубль — сделка #${webhookLead.id} уже обработана, пропускаем`);
+      const isBooking = BOOKING_STATUS_IDS.includes(sid);
+      const isDrivers = DRIVERS_STATUS_IDS.includes(sid);
+      if (!isBooking && !isDrivers) continue;
+
+      const dedupKey = `${webhookLead.id}-${sid}`;
+      if (isDuplicate(dedupKey)) {
+        console.log(`⏭ Дубль — пропускаем #${webhookLead.id}`);
         continue;
       }
 
-      console.log(`Сделка #${webhookLead.id} → запрашиваю данные из amoCRM...`);
-
+      console.log(`Сделка #${webhookLead.id} → запрашиваю данные...`);
       const fullLead = await getLeadDetails(webhookLead.id);
-      const managerName = await getManagerName(fullLead?.responsible_user_id);
+      const contacts = fullLead?._embedded?.contacts || [];
+      const contact = contacts.length > 0 ? await getContact(contacts[0].id) : null;
 
-      const message = formatMessage(fullLead, managerName);
-      await sendTelegramMessage(message);
+      // Уведомление менеджерам
+      if (isBooking) {
+        const managerName = await getManagerName(fullLead?.responsible_user_id);
+        const msg = formatBookingMessage(fullLead, managerName);
+        await sendToChat(process.env.TELEGRAM_CHAT_ID, msg);
+        console.log(`✅ Бронь отправлена менеджерам #${webhookLead.id}`);
+      }
+
+      // Уведомление водителям
+      if (isDrivers) {
+        const msg = formatDriversMessage(fullLead, contact);
+        await sendToChat(process.env.TELEGRAM_DRIVERS_CHAT_ID, msg, true);
+        console.log(`✅ Уведомление отправлено водителям #${webhookLead.id}`);
+      }
+
       notified++;
-
-      console.log(`✅ Уведомление отправлено по сделке #${webhookLead.id}`);
     }
 
     return res.status(200).json({ ok: true, notified });
