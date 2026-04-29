@@ -110,7 +110,7 @@ function formatMoney(value) {
 }
 
 // ─── Сообщение для менеджеров (НОВАЯ БРОНЬ) ──────────────────────────────────
-function formatBookingMessage(fullLead, managerName) {
+function formatBookingMessage(fullLead, managerName, contact) {
   const fields = fullLead?.custom_fields_values || [];
   console.log('FIELDS:', JSON.stringify(fields.map(f => ({ name: f.field_name, val: f.values?.[0]?.value }))));
 
@@ -121,8 +121,12 @@ function formatBookingMessage(fullLead, managerName) {
   const totalGuests = getFieldValue(fields, ['кол-во человек', 'кол-во гостей', 'всего']);
   const adults      = getFieldValue(fields, ['кол-во взрослых', 'взрослы']);
   const children    = getFieldValue(fields, ['кол-во детей', 'дет', 'ребен']);
+  const guestData   = getFieldValue(fields, ['данные гостей', 'данные гостя', 'гости']);
   const comment     = getFieldValue(fields, ['комментари', 'коммент', 'примечан']);
   const manager     = managerName || '—';
+
+  const clientName  = contact?.name || '—';
+  const clientPhone = contact?.phone || '—';
 
   const budget = Number(fullLead?.price) || 0;
   const prepaymentRaw = getFieldValue(fields, ['предоплат', 'аванс']);
@@ -131,6 +135,8 @@ function formatBookingMessage(fullLead, managerName) {
 
   return (
     `🏨 *НОВАЯ БРОНЬ*\n\n` +
+    `👤 Клиент: ${clientName}\n` +
+    `📞 Телефон: ${clientPhone}\n` +
     `📍 Санаторий: ${sanatorium}\n` +
     `🏙 Город: ${city}\n` +
     `📅 Заезд: ${checkIn}\n` +
@@ -138,6 +144,7 @@ function formatBookingMessage(fullLead, managerName) {
     `👥 Гости: ${totalGuests}\n` +
     `👤 Взрослые: ${adults}\n` +
     `🧒 Дети: ${children}\n` +
+    `📋 Данные гостей: ${guestData}\n` +
     `💳 Оплата: ${formatMoney(budget)}\n` +
     `💰 Предоплата: ${formatMoney(prepaymentRaw)}\n` +
     `💵 Остаток: ${remainder >= 0 ? formatMoney(remainder) : '—'}\n` +
@@ -243,7 +250,7 @@ export default async function handler(req, res) {
       // Уведомление менеджерам
       if (isBooking) {
         const managerName = await getManagerName(fullLead?.responsible_user_id);
-        const msg = formatBookingMessage(fullLead, managerName);
+        const msg = formatBookingMessage(fullLead, managerName, contact);
         await sendToChat(process.env.TELEGRAM_CHAT_ID, msg);
         console.log(`✅ Бронь отправлена менеджерам #${webhookLead.id}`);
       }
