@@ -8,11 +8,11 @@ export const config = {
 
 // ─── Этапы ────────────────────────────────────────────────────────────────────
 // Канал менеджеров (НОВАЯ БРОНЬ)
-const BOOKING_STATUS_IDS = (process.env.SUCCESS_STATUS_IDS || '85481598')
+const BOOKING_STATUS_IDS = (process.env.SUCCESS_STATUS_IDS || '59753278')
   .split(',').map((s) => s.trim());
 
 // Канал водителей (уведомление о заезде)
-const DRIVERS_STATUS_IDS = (process.env.DRIVERS_STATUS_IDS || '85481606')
+const DRIVERS_STATUS_IDS = (process.env.DRIVERS_STATUS_IDS || '58917062')
   .split(',').map((s) => s.trim());
 
 
